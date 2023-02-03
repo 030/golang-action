@@ -1,0 +1,69 @@
+---
+inputs:
+  app:
+    description: app
+    required: true
+  githubAction:
+    description: githubAction
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/setup-go@v2
+      with:
+        go-version: 1.19.0
+    - run: |
+        go test \
+          -short \
+          -cover \
+          -v \
+          -coverprofile=coverage.txt \
+          -covermode=atomic $(go list ./...)
+      shell: bash
+      if: ${{ startsWith(matrix.os, 'mac') || startsWith(matrix.os, 'ubuntu') }}
+    - run: |
+        docker run \
+          --rm \
+          -v $(pwd):/app \
+          -w /app \
+          -e GOFLAGS=-buildvcs=false \
+          golangci/golangci-lint:v1.50.1-alpine golangci-lint run \
+            -v \
+            --timeout 2m30s \
+            --config configs/.golangci.yml
+      shell: bash
+      if: ${{ startsWith(matrix.os, 'ubuntu') }}
+    - shell: bash
+      run: |
+        curl https://gist.githubusercontent.com/030/620a95e7a699c4db3e76b2b8b0309909/raw/e218edf140117c1b368a3fcdb7d6110a073dd0e7/go-build.sh -o go-build.sh
+        chmod +x go-build.sh
+        ./go-build.sh ${{ inputs.app }} ${{ inputs.app }}-${{ matrix.os }}
+        ls -ltr cmd/${{ inputs.app }}
+      env:
+        GO_BUILD_DELIVERABLE: ${{ inputs.app }}-${{ matrix.os }}
+        GITHUB_TAG: ${{ github.ref }}
+        SHA512_CMD: ${{ matrix.shasum }}
+      if: ${{ startsWith(matrix.os, 'mac') || startsWith(matrix.os, 'ubuntu') }}
+    - shell: cmd
+      run: |
+        echo "GITHUB_TAG: '${{ github.ref }}'"
+        echo "GO_BUILD_DELIVERABLE: '${{ inputs.app }}-${{ matrix.os }}'"
+        cd cmd/${{ inputs.app }}
+        go build -buildvcs=false -ldflags "-X main.Version=${{ github.ref }}" -o "${{ inputs.app }}-${{ matrix.os }}"
+        sha512sum "${{ inputs.app }}-${{ matrix.os }}" > "${{ inputs.app }}-${{ matrix.os }}.sha512.txt"
+        chmod +x "${{ inputs.app }}-${{ matrix.os }}"
+      if: ${{ startsWith(matrix.os, 'windows') }}
+    - uses: svenstaro/upload-release-action@v2
+      with:
+        repo_token: ${{ inputs.githubAction }}
+        file: cmd/${{ inputs.app }}/${{ inputs.app }}-${{ matrix.os }}
+        asset_name: ${{ inputs.app }}-${{ matrix.os }}
+        tag: ${{ github.ref }}
+      if: github.ref_type == 'tag'
+    - uses: svenstaro/upload-release-action@v2
+      with:
+        repo_token: ${{ inputs.githubAction }}
+        file: cmd/${{ inputs.app }}/${{ inputs.app }}-${{ matrix.os }}.sha512.txt
+        asset_name: ${{ inputs.app }}-${{ matrix.os }}.sha512.txt
+        tag: ${{ github.ref }}
+      if: github.ref_type == 'tag'
